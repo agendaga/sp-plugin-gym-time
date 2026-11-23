@@ -1,0 +1,16 @@
+{
+  "id": "hypertrophy-tracker",
+  "name": "Gym Time",
+  "version": "1.4.0",
+  "manifestVersion": 1,
+  "minSupVersion": "20.1.0",
+  "description": "Gym Time workout tracking: quick set logging with reps, weight and RIR, ORM-based overload progression (Epley/Lombardi), configurable rep ranges, shared exercises, and plateau awareness from completed sessions.",
+  "author": "zink",
+  "iFrame": true,
+  "sidePanel": false,
+  "uiKit": true,
+  "icon": "icon.svg",
+  "permissions": ["loadSyncedData", "persistDataSynced", "listSyncedDataKeys", "getDayContext", "showSnack", "openDialog", "registerHook"],
+  "hooks": ["persistedDataChanged"],
+  "dataSharing": []
+}

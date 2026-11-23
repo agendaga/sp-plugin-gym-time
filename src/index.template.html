@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Gym Time</title>
+    <style>
+      /* Only layout the UI kit does not cover; theme tokens come from the host. */
+      #tabs {
+        gap: var(--s-half);
+      }
+      #tabs button {
+        flex: 1 1 0;
+      }
+      #profile-select {
+        width: auto;
+        flex: 1 1 12rem;
+        min-width: 10rem;
+      }
+      [hidden] {
+        display: none !important;
+      }
+      dialog:not([open]) {
+        display: none !important;
+      }
+      .card h2,
+      .card h3 {
+        margin: 0;
+      }
+      .card .row input[type='number'] {
+        width: 5.5rem;
+      }
+      dialog {
+        width: min(92vw, 30rem);
+      }
+      dialog fieldset {
+        border: 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        gap: var(--s-half);
+      }
+      dialog label {
+        display: flex;
+        align-items: center;
+        gap: var(--s-half);
+        flex-wrap: wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page stack">
+      <header class="page-header">
+        <h1>Gym Time</h1>
+        <span id="today" class="text-muted"></span>
+      </header>
+      <div class="row">
+        <label for="profile-select">Switch user</label>
+        <select id="profile-select" aria-label="Switch user"></select>
+        <button id="manage-users" type="button">Manage users</button>
+      </div>
+      <nav id="tabs" class="row" aria-label="Sections">
+        <button id="tab-workout" type="button" aria-pressed="true">Workout</button>
+        <button id="tab-history" type="button" aria-pressed="false">History</button>
+        <button id="tab-exercises" type="button" aria-pressed="false">Exercises</button>
+        <button id="tab-progress" type="button" aria-pressed="false">Progress</button>
+      </nav>
+      <section id="view-workout" class="stack" aria-label="Workout"></section>
+      <section id="view-history" class="stack" aria-label="History" hidden></section>
+      <section id="view-exercises" class="stack" aria-label="Exercises" hidden></section>
+      <section id="view-progress" class="stack" aria-label="Progress" hidden></section>
+    </main>
+    <!--APP_SCRIPT-->
+  </body>
+</html>

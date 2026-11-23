@@ -1,0 +1,24 @@
+{
+  "name": "sp-fitness-plugin",
+  "version": "1.4.0",
+  "private": true,
+  "type": "module",
+  "description": "Super Productivity plugin \"Gym Time\": hypertrophy workout tracking with RIR logging and ORM-based overload progression.",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc && node scripts/build-html.mjs",
+    "test": "npm run build && node --test dist-test/*.test.js",
+    "pack": "npm run build && node scripts/pack.mjs"
+  },
+  "devDependencies": {
+    "@super-productivity/plugin-api": "^20.1.0",
+    "@types/jsdom": "^30.0.0",
+    "@types/node": "^26.6.6",
+    "esbuild": "^0.25.0",
+    "jsdom": "^31.0.1",
+    "typescript": "^5.9.0"
+  },
+  "engines": {
+    "node": ">=20.15"
+  }
+}
