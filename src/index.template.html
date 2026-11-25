@@ -6,16 +6,42 @@
     <title>Gym Time</title>
     <style>
       /* Only layout the UI kit does not cover; theme tokens come from the host. */
-      #tabs {
+      .app-header {
+        display: flex;
+        flex-wrap: wrap;
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        align-items: center;
+        gap: var(--s-half);
+        background: inherit;
+        border-bottom: 1px solid currentColor;
+        padding-bottom: var(--s-half);
+      }
+      .app-header h1 {
+        margin: 0;
+        font-size: 1.25rem;
+      }
+      .user-switcher {
+        display: inline-flex;
+        align-items: center;
+        gap: var(--s-half);
+        width: auto;
+      }
+      .user-switcher select {
+        width: auto;
+        min-width: 8rem;
+      }
+      #menu {
+        display: flex;
+        flex-direction: column;
         gap: var(--s-half);
       }
-      #tabs button {
-        flex: 1 1 0;
+      #menu button {
+        text-align: left;
       }
-      #profile-select {
-        width: auto;
-        flex: 1 1 12rem;
-        min-width: 10rem;
+      #menu button[aria-pressed='true'] {
+        font-weight: 600;
       }
       [hidden] {
         display: none !important;
@@ -50,25 +76,29 @@
   </head>
   <body>
     <main class="page stack">
-      <header class="page-header">
-        <h1>Gym Time</h1>
+      <header class="app-header">
+        <button id="menu-toggle" type="button" aria-label="Open menu" aria-expanded="false">
+          <span class="material-icons" aria-hidden="true">menu</span>
+        </button>
+        <h1 class="grow">Gym Time</h1>
         <span id="today" class="text-muted"></span>
+        <label class="user-switcher" for="profile-select">
+          <span class="material-icons" aria-hidden="true">person</span>
+          <select id="profile-select" aria-label="Switch user"></select>
+        </label>
       </header>
-      <div class="row">
-        <label for="profile-select">Switch user</label>
-        <select id="profile-select" aria-label="Switch user"></select>
-        <button id="manage-users" type="button">Manage users</button>
-      </div>
-      <nav id="tabs" class="row" aria-label="Sections">
-        <button id="tab-workout" type="button" aria-pressed="true">Workout</button>
-        <button id="tab-history" type="button" aria-pressed="false">History</button>
-        <button id="tab-exercises" type="button" aria-pressed="false">Exercises</button>
-        <button id="tab-progress" type="button" aria-pressed="false">Progress</button>
+      <nav id="menu" hidden aria-label="Sections">
+        <button id="menu-workout" type="button" aria-pressed="true">Workout</button>
+        <button id="menu-history" type="button" aria-pressed="false">History</button>
+        <button id="menu-exercises" type="button" aria-pressed="false">Exercises</button>
+        <button id="menu-progress" type="button" aria-pressed="false">Progress</button>
+        <button id="menu-settings" type="button" aria-pressed="false">Settings</button>
       </nav>
       <section id="view-workout" class="stack" aria-label="Workout"></section>
       <section id="view-history" class="stack" aria-label="History" hidden></section>
       <section id="view-exercises" class="stack" aria-label="Exercises" hidden></section>
       <section id="view-progress" class="stack" aria-label="Progress" hidden></section>
+      <section id="view-settings" class="stack" aria-label="Settings" hidden></section>
     </main>
     <!--APP_SCRIPT-->
   </body>

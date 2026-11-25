@@ -58,9 +58,29 @@ one-rep max (ORM).
   remove exercises, log sets, or change completion. Click a set chip to remove
   that set; to correct it, remove it and log the corrected values. Delete a
   whole workout from History after confirming the deletion.
-- **Users** — use **Switch user** to change profiles and **Manage users** for
-  add, rename and confirmed delete actions. Workouts and progress stay
-  profile-specific. Exercise definitions are shared across all profiles.
+- **Sticky header with menu and user switcher** — a sticky top header holds a
+  hamburger menu (Workout, History, Exercises, Progress, Settings; selecting a
+  page closes the menu) and a user selector that shows a person icon and the
+  current profile's name and switches profiles.
+- **Settings view** — user management (**Manage users** for add, rename and
+  confirmed delete actions), the per-user kg/lb unit selector, and the workout
+  split manager. **Manage users** is available only in Settings.
+- **Workout splits** — per user, named groups of shared exercises. Create,
+  edit and delete them in Settings. Generating a workout offers the user's
+  splits plus an **All exercises** option (the default) and creates the plan
+  with exactly the selected exercise set. A split whose exercises were all
+  deleted shows a clear warning and generates no plan.
+- **kg/lb units per user** — weights are always stored and progressed in
+  canonical kilograms. The per-user unit setting converts every displayed
+  weight: set inputs, prescription lines, logged set chips, ORM estimates,
+  best-set labels, the progress chart axes and points, exercise start weights
+  and the generation preview. Pound input converts back to kilograms (rounded
+  to the nearest 0.5 kg) at each input boundary; kilogram storage and
+  progression are unchanged. Switching units never rewrites workouts,
+  exercises or history.
+- **Users** — switch profiles with the header selector and manage them from
+  **Settings → Manage users**. Workouts, splits, unit settings and progress
+  stay profile-specific. Exercise definitions are shared across all profiles.
 
 ## Install
 
@@ -121,6 +141,16 @@ be integers from 1 to 100, with `targetRepMax >= targetRepMin`. Legacy
 recorded before RIR tracking (no `rir` field) parse with RIR 1, and a present
 `rir` must be an integer from 0 to 10.
 
+Each profile's workout splits are independent records under
+`split:<profileId>:<splitId>` with `{ id, name, exerciseIds }`; the split id
+must match its key, the name must be non-empty, and `exerciseIds` is a list
+of non-empty strings (duplicates collapse, order is kept). Each profile's
+unit setting is a separate record under `settings:<profileId>` with
+`{ unit: 'kg' | 'lb' }`; any other value is skipped and the profile falls
+back to kg. Deleting a profile clears its `profile:`, `user:<id>:plan:`,
+`user:<id>:ex:`, `settings:<id>` and `split:<id>:` records only — never
+shared `ex:` records or other users' data.
+
 The UI refreshes on the `persistedDataChanged` hook and also updates its local
 state optimistically after each of its own writes, so the view is correct even
 before the hook fires.
@@ -128,8 +158,12 @@ before the hook fires.
 Users are organizational profiles, not separate logins or access controls.
 All profiles are available to anyone with access to the same Super Productivity
 data, and sync with it. Concurrent edits to the same exercise or workout on
-different devices may overwrite each other. Switch users with the selector;
-the original user is selected when the plugin is reopened.
+different devices may overwrite each other. Switch users with the header
+selector; the original user is selected when the plugin is reopened. Weight
+units are per profile: the display converts with `1 kg = 2.2046226218 lb`,
+pound values round to one decimal for display and to the nearest 0.5 kg when
+entered, and canonical storage, load targets and progression stay in
+kilograms regardless of the setting.
 
 ## Behavior details and tradeoffs
 
@@ -183,6 +217,23 @@ the original user is selected when the plugin is reopened.
   their logged sets; nothing about the chart is persisted.
 - **Seeding.** Six default exercises are written to shared exercise storage on
   first open. Deleting every shared exercise re-seeds it on the next open.
+- **Units.** Kilograms are canonical everywhere: stored sets, plan targets,
+  progression and ORM math. The unit setting is a display layer. Pound
+  displays round to one decimal and trim a trailing `.0`; pound inputs
+  (set weight, exercise start weight) convert back and snap to the nearest
+  0.5 kg so internal increments, load targets and chart data never drift.
+  Kilogram input passes through unrounded. The number input step is 0.5 kg
+  or a practical 0.1 lb.
+- **Splits.** A split only references shared exercise ids; it never copies
+  exercise definitions. Renaming or deleting a split never touches plans
+  already generated from it. Generation with a split selected includes
+  exactly its available exercises; split ids pointing at deleted exercises
+  are skipped and, when nothing valid remains, the plugin warns and refuses
+  to create an empty plan. Splits and unit settings load with the profile,
+  so switching users swaps them atomically with workouts.
+- **Sticky header.** The header is `position: sticky` with `background:
+  inherit`, so it follows the host theme; the hamburger menu is a plain
+  hidden-until-toggled list of buttons, no dependency.
 - **minSupVersion 20.1.0.** Keyed `loadSyncedData(key)` and
   `listSyncedDataKeys()` are recent additions; the plugin declares the oldest
   host that provably has them and shows a clear error if the API is missing.
