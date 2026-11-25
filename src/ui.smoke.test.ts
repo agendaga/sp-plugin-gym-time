@@ -196,12 +196,15 @@ test('header contains a hamburger menu and a user selector showing the profile n
   const header = document.querySelector('header.app-header');
   assert.ok(header, 'missing sticky app header');
   assert.equal(document.defaultView!.getComputedStyle(header).position, 'sticky');
-  assert.equal(document.defaultView!.getComputedStyle(header).display, 'flex');
   assert.equal(document.defaultView!.getComputedStyle(header).backgroundColor, 'rgb(12, 34, 56)');
+  const headerRow = header.querySelector('.app-header__row');
+  assert.ok(headerRow, 'missing header controls row');
+  assert.equal(document.defaultView!.getComputedStyle(headerRow).display, 'flex');
   const menu = document.getElementById('menu');
   assert.ok(menu, 'missing section menu');
   assert.equal(menu.parentElement, header);
   assert.equal(menu.previousElementSibling?.className, 'app-header__row');
+  assert.equal(document.defaultView!.getComputedStyle(menu).position, 'static');
   assert.equal(document.getElementById('menu-toggle')?.getAttribute('aria-label'), 'Open menu');
   const select = document.getElementById('profile-select') as HTMLSelectElement;
   assert.equal(select.getAttribute('aria-label'), 'Switch user');
