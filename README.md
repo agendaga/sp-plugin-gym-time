@@ -231,9 +231,9 @@ kilograms regardless of the setting.
   are skipped and, when nothing valid remains, the plugin warns and refuses
   to create an empty plan. Splits and unit settings load with the profile,
   so switching users swaps them atomically with workouts.
-- **Sticky header.** The header is `position: sticky` with `background:
-  inherit`, so it follows the host theme; the hamburger menu is a plain
-  hidden-until-toggled list of buttons, no dependency.
+- **Sticky header.** The header is transparent at the top and uses the host
+  theme's `--bg` once scrolled, keeping underlying content hidden. The
+  hamburger menu stays in normal flow inside the header below its controls.
 - **minSupVersion 20.1.0.** Keyed `loadSyncedData(key)` and
   `listSyncedDataKeys()` are recent additions; the plugin declares the oldest
   host that provably has them and shows a clear error if the API is missing.
