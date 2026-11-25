@@ -1118,17 +1118,6 @@ function setMenuOpen(open: boolean): void {
   toggle.setAttribute('aria-expanded', String(open));
 }
 
-const appHeader = document.querySelector<HTMLElement>('.app-header');
-function updateHeaderBackground(): void {
-  appHeader?.classList.toggle(
-    'app-header--scrolled',
-    (document.defaultView?.scrollY ?? 0) > 0,
-  );
-}
-
-document.defaultView?.addEventListener('scroll', updateHeaderBackground, { passive: true });
-updateHeaderBackground();
-
 function showTab(name: ViewName): void {
   activeView = name;
   for (const v of VIEWS) {

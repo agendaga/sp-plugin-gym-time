@@ -197,13 +197,13 @@ test('header contains a hamburger menu and a user selector showing the profile n
   assert.ok(header, 'missing sticky app header');
   assert.equal(document.defaultView!.getComputedStyle(header).position, 'sticky');
   const view = document.defaultView!;
-  assert.equal(view.getComputedStyle(header).backgroundColor, 'rgba(0, 0, 0, 0)');
+  assert.equal(view.getComputedStyle(header).backgroundColor, 'rgb(12, 34, 56)');
   Object.defineProperty(view, 'scrollY', { configurable: true, value: 100 });
   view.dispatchEvent(new view.Event('scroll'));
   assert.equal(view.getComputedStyle(header).backgroundColor, 'rgb(12, 34, 56)');
   Object.defineProperty(view, 'scrollY', { configurable: true, value: 0 });
   view.dispatchEvent(new view.Event('scroll'));
-  assert.equal(view.getComputedStyle(header).backgroundColor, 'rgba(0, 0, 0, 0)');
+  assert.equal(view.getComputedStyle(header).backgroundColor, 'rgb(12, 34, 56)');
   const headerRow = header.querySelector('.app-header__row');
   assert.ok(headerRow, 'missing header controls row');
   assert.equal(document.defaultView!.getComputedStyle(headerRow).display, 'flex');
