@@ -745,6 +745,7 @@ test('generation from a split plans exactly its exercises; All exercises plans e
   buttonsIn(view('workout'), 'Generate next workout')[0]!.click();
   const dialog = lastDialog();
   const splitSelect = dialog.querySelector('#generate-split') as HTMLSelectElement;
+  assert.ok(![...splitSelect.options].some((option) => option.textContent === 'All exercises'));
   splitSelect.value = splitRecords('default')[0]!.id;
   splitSelect.dispatchEvent(new JSEvent('change'));
   await flush();
@@ -761,10 +762,17 @@ test('generation from a split plans exactly its exercises; All exercises plans e
     ['bench-press', 'squat'],
   );
 
-  // The default All exercises selection plans every defined exercise.
+  // With no splits, All exercises is the sole option and plans every exercise.
+  openMenuAndGo('settings');
+  (view('settings').querySelector('button[aria-label="Delete split Upper body"]') as HTMLButtonElement).click();
+  await flush();
+  openMenuAndGo('workout');
   buttonsIn(view('workout'), 'Generate next workout')[0]!.click();
   const allDialog = lastDialog();
-  assert.equal((allDialog.querySelector('#generate-split') as HTMLSelectElement).value, '');
+  const allSelect = allDialog.querySelector('#generate-split') as HTMLSelectElement;
+  assert.equal(allSelect.options.length, 1);
+  assert.equal(allSelect.options[0]?.textContent, 'All exercises');
+  assert.equal(allSelect.value, '');
   await submitDialog(allDialog);
   const definedCount = view('exercises').querySelectorAll('.list-item').length;
   assert.ok(planRecords().some((p) => p.exercises.length === definedCount));

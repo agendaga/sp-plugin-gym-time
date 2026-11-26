@@ -67,9 +67,10 @@ one-rep max (ORM).
   split manager. **Manage users** is available only in Settings.
 - **Workout splits** — per user, named groups of shared exercises. Create,
   edit and delete them in Settings. Generating a workout offers the user's
-  splits plus an **All exercises** option (the default) and creates the plan
-  with exactly the selected exercise set. A split whose exercises were all
-  deleted shows a clear warning and generates no plan.
+  splits when any exist; **All exercises** is offered only when the user has
+  no splits. Generation creates a plan with exactly the selected exercise
+  set. A split whose exercises were all deleted shows a clear warning and
+  generates no plan.
 - **kg/lb units per user** — weights are always stored and progressed in
   canonical kilograms. The per-user unit setting converts every displayed
   weight: set inputs, prescription lines, logged set chips, ORM estimates,

@@ -785,7 +785,7 @@ async function openGenerateDialog(): Promise<void> {
   const dialog = el('dialog');
   const allDefs = [...store.exercises].sort((a, b) => a.name.localeCompare(b.name));
   const splitSelect = el('select', { id: 'generate-split', 'aria-label': 'Workout split' },
-    el('option', { value: '' }, 'All exercises'),
+    ...(store.splits.length === 0 ? [el('option', { value: '' }, 'All exercises')] : []),
     ...store.splits.map((split) => el('option', { value: split.id }, split.name)),
   );
   const preview = el('div', { class: 'stack' });
