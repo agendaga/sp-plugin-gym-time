@@ -16,9 +16,12 @@
       }
       .app-header__row {
         display: flex;
-        flex-wrap: wrap;
+        flex-wrap: nowrap;
         align-items: center;
         gap: var(--s-half);
+      }
+      #today {
+        white-space: nowrap;
       }
       .app-header h1 {
         margin: 0;
@@ -29,10 +32,20 @@
           display: none;
         }
         #today {
-          flex: 1;
+          flex: 1 1 0;
+          min-width: 0;
           color: var(--text-color);
-          font-size: 1.25rem;
+          font-size: clamp(0.7rem, 4vw, 1.25rem);
           font-weight: 600;
+        }
+        .user-switcher {
+          flex-shrink: 1;
+          min-width: 0;
+        }
+        .user-switcher select {
+          width: clamp(3.5rem, 22vw, 8rem);
+          min-width: 0;
+          font-size: clamp(0.65rem, 3vw, 0.875rem);
         }
       }
       .user-switcher {

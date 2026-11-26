@@ -202,6 +202,7 @@ test('header contains a hamburger menu and a user selector showing the profile n
   const headerRow = header.querySelector('.app-header__row');
   assert.ok(headerRow, 'missing header controls row');
   assert.equal(document.defaultView!.getComputedStyle(headerRow).display, 'flex');
+  assert.equal(document.defaultView!.getComputedStyle(headerRow).flexWrap, 'nowrap');
   const menu = document.getElementById('menu');
   assert.ok(menu, 'missing section menu');
   assert.equal(menu.parentElement, header);
