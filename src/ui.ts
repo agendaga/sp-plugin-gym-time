@@ -1,6 +1,8 @@
 /**
  * Iframe UI for the Gym Time plugin.
- * Each exercise and workout plan is stored under its own synced key.
+ * Each exercise, workout plan, split and per-user setting is stored under its
+ * own synced key. Weights are canonical kilograms; the per-user unit only
+ * converts display and input at this layer.
  */
 import type { PluginAPI as PluginAPIType } from '@super-productivity/plugin-api';
 declare const PluginAPI: PluginAPIType;
@@ -20,6 +22,7 @@ import {
   parseLoggedSet,
   parseWorkoutPlan,
   plateauStatus,
+  roundToHalf,
   sessionOrm,
   setOrm,
   type ExerciseDef,
@@ -33,22 +36,41 @@ import {
 const EX_PREFIX = 'ex:';
 const PLAN_PREFIX = 'plan:';
 const PROFILE_PREFIX = 'profile:';
+const SPLIT_PREFIX = 'split:';
+const SETTINGS_PREFIX = 'settings:';
 const DEFAULT_PROFILE = 'default';
+/** Pounds per kilogram; the only conversion constant in the plugin. */
+const LB_PER_KG = 2.2046226218;
 
 interface Profile {
   id: string;
   name: string;
 }
 
+/** Named exercise group scoped to one profile; exercises stay shared. */
+interface WorkoutSplit {
+  id: string;
+  name: string;
+  exerciseIds: string[];
+}
+
+/** Per-profile display unit. Canonical storage and progression stay kg. */
+interface UserSettings {
+  unit: 'kg' | 'lb';
+}
+
 interface Store {
   exercises: ExerciseDef[];
   plans: WorkoutPlan[];
+  splits: WorkoutSplit[];
 }
 
-let store: Store = { exercises: [], plans: [] };
+let store: Store = { exercises: [], plans: [], splits: [] };
 let storageSupported = true;
 let profiles: Profile[] = [{ id: DEFAULT_PROFILE, name: 'My workouts' }];
 let activeProfile = DEFAULT_PROFILE;
+/** Display unit of the active profile; kg when it has no settings record. */
+let unit: 'kg' | 'lb' = 'kg';
 let selectedPlanId: string | null = null;
 let busy = false;
 let refreshPending = false;
@@ -59,6 +81,18 @@ function exKey(id: string): string {
 
 function planKey(id: string): string {
   return recordPrefix(PLAN_PREFIX) + id;
+}
+
+function splitKeyPrefix(profileId: string): string {
+  return `${SPLIT_PREFIX}${profileId}:`;
+}
+
+function splitKey(profileId: string, splitId: string): string {
+  return `${splitKeyPrefix(profileId)}${splitId}`;
+}
+
+function settingsKey(profileId: string): string {
+  return `${SETTINGS_PREFIX}${profileId}`;
 }
 
 function recordPrefix(kind: string, profileId = activeProfile): string {
@@ -81,6 +115,37 @@ function parseProfile(raw: unknown): Profile {
   return { id: record.id, name: record.name.trim() };
 }
 
+function parseWorkoutSplit(raw: unknown): WorkoutSplit {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    throw new ParseError('Invalid workout split');
+  }
+  const record = raw as Record<string, unknown>;
+  if (typeof record.id !== 'string' || !/^[\w-]+$/.test(record.id) ||
+      typeof record.name !== 'string' || !record.name.trim() ||
+      !Array.isArray(record.exerciseIds)) {
+    throw new ParseError('Invalid workout split');
+  }
+  const exerciseIds: string[] = [];
+  for (const item of record.exerciseIds) {
+    if (typeof item !== 'string' || !item.trim()) {
+      throw new ParseError('Invalid workout split');
+    }
+    if (!exerciseIds.includes(item)) exerciseIds.push(item);
+  }
+  return { id: record.id, name: record.name.trim(), exerciseIds };
+}
+
+function parseUserSettings(raw: unknown): UserSettings {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    throw new ParseError('Invalid user settings');
+  }
+  const record = raw as Record<string, unknown>;
+  if (record.unit !== 'kg' && record.unit !== 'lb') {
+    throw new ParseError('Invalid user settings');
+  }
+  return { unit: record.unit };
+}
+
 async function loadStore(profileId = activeProfile): Promise<number> {
   if (typeof PluginAPI.listSyncedDataKeys !== 'function') {
     storageSupported = false;
@@ -88,7 +153,9 @@ async function loadStore(profileId = activeProfile): Promise<number> {
   }
   const exercises: ExerciseDef[] = [];
   const plans: WorkoutPlan[] = [];
+  const loadedSplits: WorkoutSplit[] = [];
   const loadedProfiles: Profile[] = [];
+  let loadedUnit: 'kg' | 'lb' = 'kg';
   const keys = await PluginAPI.listSyncedDataKeys();
   const sharedExerciseKeys = new Set(keys.filter((key) => key.startsWith(EX_PREFIX)));
   let unreadable = 0;
@@ -98,7 +165,9 @@ async function loadStore(profileId = activeProfile): Promise<number> {
     const isLegacyProfileExercise = /^user:[\w-]+:ex:.+$/.test(key);
     const isExercise = isSharedExercise || isLegacyProfileExercise;
     const isPlan = key.startsWith(recordPrefix(PLAN_PREFIX, profileId));
-    if (!isProfile && !isExercise && !isPlan) continue;
+    const isSplit = key.startsWith(splitKeyPrefix(profileId));
+    const isSettings = key === settingsKey(profileId);
+    if (!isProfile && !isExercise && !isPlan && !isSplit && !isSettings) continue;
     const raw = await PluginAPI.loadSyncedData(key);
     if (raw === null || raw === '') continue;
     let parsed: unknown;
@@ -135,6 +204,12 @@ async function loadStore(profileId = activeProfile): Promise<number> {
         loadedProfiles.push(profile);
       } else if (isPlan) {
         plans.push(parseWorkoutPlan(parsed));
+      } else if (isSplit) {
+        const split = parseWorkoutSplit(parsed);
+        if (key !== splitKey(profileId, split.id)) throw new ParseError('Split key does not match');
+        loadedSplits.push(split);
+      } else if (isSettings) {
+        loadedUnit = parseUserSettings(parsed).unit;
       }
     } catch {
       unreadable++;
@@ -144,7 +219,8 @@ async function loadStore(profileId = activeProfile): Promise<number> {
   const defaultProfile = loadedProfiles.find((profile) => profile.id === DEFAULT_PROFILE);
   profiles = [defaultProfile ?? { id: DEFAULT_PROFILE, name: 'My workouts' },
     ...loadedProfiles.filter((profile) => profile.id !== DEFAULT_PROFILE)];
-  store = { exercises, plans };
+  store = { exercises, plans, splits: loadedSplits };
+  unit = loadedUnit;
   if (unreadable > 0) {
     snack(`Skipped ${unreadable} unreadable synced record(s)`, 'WARNING');
   }
@@ -161,6 +237,14 @@ async function deleteExercise(id: string): Promise<void> {
 
 async function savePlan(plan: WorkoutPlan): Promise<void> {
   await PluginAPI.persistDataSynced(JSON.stringify(plan), planKey(plan.id));
+}
+
+async function saveSplit(split: WorkoutSplit): Promise<void> {
+  await PluginAPI.persistDataSynced(JSON.stringify(split), splitKey(activeProfile, split.id));
+}
+
+async function saveUserSettings(profileId: string, settings: UserSettings): Promise<void> {
+  await PluginAPI.persistDataSynced(JSON.stringify(settings), settingsKey(profileId));
 }
 
 async function deletePlan(plan: WorkoutPlan): Promise<void> {
@@ -255,9 +339,31 @@ function callout(text: string, variant = ''): HTMLDivElement {
   return el('div', { class: `callout${variant ? ' callout--' + variant : ''}` }, el('p', {}, text));
 }
 
-/** One-decimal kg formatting for derived ORM estimates. */
-function fmtKg(n: number): string {
-  return String(Math.round(n * 10) / 10);
+/**
+ * Weight display in the active profile's unit. Kilogram values pass through
+ * (already 0.5-stepped or one-decimal ORM estimates); pounds convert and
+ * round to one decimal. Suffix every label with weightUnit().
+ */
+function toDisplayWeight(kg: number): number {
+  const v = unit === 'lb' ? kg * LB_PER_KG : kg;
+  return Math.round(v * 10) / 10;
+}
+
+function fmtWeight(kg: number): string {
+  return String(toDisplayWeight(kg));
+}
+
+function weightUnit(): 'kg' | 'lb' {
+  return unit;
+}
+
+/**
+ * Convert an entered display weight back to canonical kg at the input
+ * boundary. Pounds round to the nearest 0.5 kg so internal increments and
+ * progression stay unchanged; kilograms pass through as entered.
+ */
+function fromDisplayWeight(value: number): number {
+  return unit === 'lb' ? roundToHalf(value / LB_PER_KG) : value;
 }
 
 function plateauChip(exerciseId: string): HTMLElement {
@@ -343,9 +449,9 @@ function ormTrendChart(sessions: SessionRecord[]): HTMLElement | null {
     x1: padL, y1: height - padB, x2: width - padR, y2: height - padB,
     stroke: 'currentColor', 'stroke-width': 1,
   }));
-  svg.append(svgEl('text', { x: 2, y: y(hi) + 3, 'font-size': 9, fill: 'currentColor' }, `${fmtKg(hi)} kg`));
+  svg.append(svgEl('text', { x: 2, y: y(hi) + 3, 'font-size': 9, fill: 'currentColor' }, `${fmtWeight(hi)} ${weightUnit()}`));
   if (lo !== hi) {
-    svg.append(svgEl('text', { x: 2, y: y(lo) - 3, 'font-size': 9, fill: 'currentColor' }, `${fmtKg(lo)} kg`));
+    svg.append(svgEl('text', { x: 2, y: y(lo) - 3, 'font-size': 9, fill: 'currentColor' }, `${fmtWeight(lo)} ${weightUnit()}`));
   }
 
   const labelEveryDate = points.length <= 6;
@@ -354,13 +460,13 @@ function ormTrendChart(sessions: SessionRecord[]): HTMLElement | null {
     const py = y(p.orm);
     const dot = svgEl('circle', {
       cx: px, cy: py, r: 2.5, fill: 'currentColor',
-      'data-day': p.day, 'data-orm': fmtKg(p.orm),
+      'data-day': p.day, 'data-orm': fmtWeight(p.orm),
     });
-    dot.append(svgEl('title', {}, `${p.day}: ${fmtKg(p.orm)} kg ORM`));
+    dot.append(svgEl('title', {}, `${p.day}: ${fmtWeight(p.orm)} ${weightUnit()} ORM`));
     svg.append(dot);
     svg.append(svgEl('text', {
       x: px, y: py - 5, 'font-size': 9, 'text-anchor': 'middle', fill: 'currentColor',
-    }, fmtKg(p.orm)));
+    }, fmtWeight(p.orm)));
     if (labelEveryDate || i === 0 || i === points.length - 1) {
       svg.append(svgEl('text', {
         x: px, y: height - padB + 13, 'font-size': 9, 'text-anchor': 'middle', fill: 'currentColor',
@@ -506,9 +612,9 @@ function plannedExerciseCard(plan: WorkoutPlan, planned: PlannedExercise): HTMLE
   const weightInput = el('input', {
     type: 'number',
     min: '0',
-    step: '0.5',
-    value: String(planned.weight),
-    'aria-label': 'Weight (kg)',
+    step: unit === 'lb' ? '0.1' : '0.5',
+    value: String(toDisplayWeight(planned.weight)),
+    'aria-label': `Weight (${unit})`,
   });
   const rirInput = el('input', {
     type: 'number',
@@ -522,7 +628,7 @@ function plannedExerciseCard(plan: WorkoutPlan, planned: PlannedExercise): HTMLE
   const setsRow = el(
     'p',
     { class: 'text-muted' },
-    `${planned.targetSets} × ${planned.targetReps} @ ${planned.weight} kg · ORM ${fmtKg(estimateOrm(planned.weight, planned.targetReps, DEFAULT_RIR))} kg`,
+    `${planned.targetSets} × ${planned.targetReps} @ ${fmtWeight(planned.weight)} ${unit} · ORM ${fmtWeight(estimateOrm(planned.weight, planned.targetReps, DEFAULT_RIR))} ${unit}`,
     planned.isComplete ? el('span', { class: 'chip' }, 'Complete') : null,
   );
 
@@ -535,7 +641,7 @@ function plannedExerciseCard(plan: WorkoutPlan, planned: PlannedExercise): HTMLE
       loggedRow.append(el('button', {
         class: 'chip',
         type: 'button',
-        'aria-label': `Remove set ${index + 1}: ${s.reps} reps at ${s.weight} kg, RIR ${s.rir}, estimated ORM ${fmtKg(orm)} kg`,
+        'aria-label': `Remove set ${index + 1}: ${s.reps} reps at ${fmtWeight(s.weight)} ${unit}, RIR ${s.rir}, estimated ORM ${fmtWeight(orm)} ${unit}`,
         onclick: () => void perform(async () => {
           const removed = planned.loggedSets.splice(index, 1);
           try {
@@ -546,7 +652,7 @@ function plannedExerciseCard(plan: WorkoutPlan, planned: PlannedExercise): HTMLE
           }
           renderAll();
         }),
-      }, `${s.reps}×${s.weight} kg @ RIR ${s.rir} · ${fmtKg(orm)} kg ORM ×`));
+      }, `${s.reps}×${fmtWeight(s.weight)} ${unit} @ RIR ${s.rir} · ${fmtWeight(orm)} ${unit} ORM ×`));
     }
   }
 
@@ -560,7 +666,7 @@ function plannedExerciseCard(plan: WorkoutPlan, planned: PlannedExercise): HTMLE
     try {
       set = parseLoggedSet({
         reps: Number(repsInput.value),
-        weight: Number(weightInput.value),
+        weight: fromDisplayWeight(Number(weightInput.value)),
         rir: Number(rirInput.value),
       });
     } catch (e) {
@@ -615,7 +721,7 @@ function plannedExerciseCard(plan: WorkoutPlan, planned: PlannedExercise): HTMLE
       repsInput,
       el('span', { class: 'text-muted' }, 'reps'),
       weightInput,
-      el('span', { class: 'text-muted' }, 'kg'),
+      el('span', { class: 'text-muted' }, unit),
       rirInput,
       el('span', { class: 'text-muted' }, 'RIR'),
       el('button', { class: 'btn-primary', onclick: () => void perform(logSet) }, 'Log set'),
@@ -677,35 +783,60 @@ function openAddExerciseDialog(plan: WorkoutPlan): void {
 
 async function openGenerateDialog(): Promise<void> {
   const dialog = el('dialog');
-  const boxes: Array<{ def: ExerciseDef; box: HTMLInputElement }> = [];
-  const current = selectedPlan();
-  const preselect = new Set(current?.exercises.map((pe) => pe.exerciseId) ?? []);
-  const chooser = el('fieldset', { class: 'stack' });
+  const allDefs = [...store.exercises].sort((a, b) => a.name.localeCompare(b.name));
+  const splitSelect = el('select', { id: 'generate-split', 'aria-label': 'Workout split' },
+    ...(store.splits.length === 0 ? [el('option', { value: '' }, 'All exercises')] : []),
+    ...store.splits.map((split) => el('option', { value: split.id }, split.name)),
+  );
+  const preview = el('div', { class: 'stack' });
 
-  for (const def of [...store.exercises].sort((a, b) => a.name.localeCompare(b.name))) {
-    const target = nextTarget(def, assessProgress(def.id, store.plans).sessions);
-    const box = el('input', { type: 'checkbox', value: def.id });
-    box.checked = preselect.has(def.id);
-    boxes.push({ def, box });
-    chooser.append(
-      el(
-        'label',
-        {},
-        box,
-        ` ${def.name} `,
-        el(
-          'span',
-          { class: 'text-muted text-sm' },
-          `— next: ${def.targetSets}×${target.targetReps} @ ${target.weight} kg`,
-        ),
-      ),
-    );
-  }
+  /** Exercises the current selection plans, plus how many split ids dangle. */
+  const resolveSelection = (): { defs: ExerciseDef[]; missing: number } => {
+    if (splitSelect.value === '') return { defs: allDefs, missing: 0 };
+    const split = store.splits.find((item) => item.id === splitSelect.value);
+    const ids = split?.exerciseIds ?? [];
+    return {
+      defs: ids.flatMap((id) => {
+        const def = allDefs.find((item) => item.id === id);
+        return def ? [def] : [];
+      }),
+      missing: ids.filter((id) => !allDefs.some((item) => item.id === id)).length,
+    };
+  };
+
+  const renderPreview = (): void => {
+    const { defs: picked, missing } = resolveSelection();
+    preview.replaceChildren();
+    if (picked.length === 0) {
+      preview.append(callout(
+        splitSelect.value === ''
+          ? 'No exercises are defined yet. Add one in Exercises first.'
+          : 'This split has no available exercises. Edit it in Settings or pick another split.',
+        'danger',
+      ));
+      return;
+    }
+    const list = el('ul', { class: 'list' });
+    for (const def of picked) {
+      const target = nextTarget(def, assessProgress(def.id, store.plans).sessions);
+      list.append(el('li', {},
+        `${def.name} — next: ${def.targetSets}×${target.targetReps} @ ${fmtWeight(target.weight)} ${unit}`));
+    }
+    preview.append(list);
+    if (missing > 0) {
+      preview.append(callout(
+        `${missing} exercise(s) in this split no longer exist and will be skipped.`,
+        'warning',
+      ));
+    }
+  };
+  splitSelect.addEventListener('change', renderPreview);
+  renderPreview();
 
   const generate = async (): Promise<void> => {
-    const picked = boxes.filter((b) => b.box.checked).map((b) => b.def);
+    const { defs: picked } = resolveSelection();
     if (picked.length === 0) {
-      snack('Pick at least one exercise', 'WARNING');
+      snack('Nothing to generate: the selected split has no available exercises', 'WARNING');
       return;
     }
     let plan: WorkoutPlan;
@@ -729,7 +860,7 @@ async function openGenerateDialog(): Promise<void> {
   dialog.append(el('div', { class: 'stack' },
     el('h2', {}, 'Generate next workout'),
     el('p', { class: 'text-muted' }, 'Targets come from your recent completed sessions: reps advance within each exercise range, and the next load follows your best set\u2019s estimated one-rep max (ORM) plus the exercise\u2019s overload percent.'),
-    dialogForm(dialog, chooser, 'Generate', generate),
+    dialogForm(dialog, el('div', { class: 'stack' }, field('Workout split', splitSelect), preview), 'Generate', generate),
   ));
   showDialog(dialog);
 }
@@ -793,7 +924,7 @@ function renderExercisesTab(section: HTMLElement): void {
           el(
             'span',
             { class: 'text-muted text-sm' },
-            `${def.muscleGroup || 'No muscle group'} · +${def.overloadPct}% · ${def.targetRepMin}-${def.targetRepMax} reps × ${def.targetSets} sets · start ${def.startWeight} kg`,
+            `${def.muscleGroup || 'No muscle group'} · +${def.overloadPct}% · ${def.targetRepMin}-${def.targetRepMax} reps × ${def.targetSets} sets · start ${fmtWeight(def.startWeight)} ${unit}`,
           ),
           plateauChip(def.id),
         ),
@@ -872,8 +1003,9 @@ async function openExerciseDialog(existing: ExerciseDef | undefined): Promise<vo
     id: `weight-${uid}`,
     type: 'number',
     min: '0',
-    step: '0.5',
-    value: String(existing?.startWeight ?? 40),
+    step: unit === 'lb' ? '0.1' : '0.5',
+    value: String(toDisplayWeight(existing?.startWeight ?? 40)),
+    'aria-label': `Starting weight (${unit})`,
   });
 
   const dialog = el('dialog');
@@ -886,7 +1018,9 @@ async function openExerciseDialog(existing: ExerciseDef | undefined): Promise<vo
     field('Minimum target reps', targetRepMin, 'Reps per set at the start of a fresh load level.'),
     field('Maximum target reps', targetRepMax, 'Increase load after this rep target is reached and completed.'),
     field('Sets per session', targetSets),
-    field('Starting weight (kg)', startWeight),
+    field(`Starting weight (${unit})`, startWeight, unit === 'lb'
+      ? 'Entered in pounds; stored as kilograms (rounded to 0.5 kg).'
+      : undefined),
   );
 
   const submit = async (): Promise<void> => {
@@ -898,7 +1032,7 @@ async function openExerciseDialog(existing: ExerciseDef | undefined): Promise<vo
       targetRepMin: Number(targetRepMin.value),
       targetRepMax: Number(targetRepMax.value),
       targetSets: Number(targetSets.value),
-      startWeight: Number(startWeight.value),
+      startWeight: fromDisplayWeight(Number(startWeight.value)),
     };
     try {
       parseExerciseDef(candidate);
@@ -960,31 +1094,41 @@ function renderProgressTab(section: HTMLElement): void {
           { class: 'text-muted' },
           'No completed sessions yet. The ORM trend appears here once a workout with logged sets is marked complete.',
         ),
-        el('p', {}, `Best estimated ORM: ${bestOrm > 0 ? `${fmtKg(bestOrm)} kg` : '—'}`),
-        el('p', {}, `Last session ORM: ${last ? `${fmtKg(lastOrm)} kg` : '—'}`),
-        el('p', {}, `Best set: ${a.bestSet ? `${a.bestSet.reps}×${a.bestSet.weight} kg @ RIR ${a.bestSet.rir}` : '—'}`),
+        el('p', {}, `Best estimated ORM: ${bestOrm > 0 ? `${fmtWeight(bestOrm)} ${unit}` : '—'}`),
+        el('p', {}, `Last session ORM: ${last ? `${fmtWeight(lastOrm)} ${unit}` : '—'}`),
+        el('p', {}, `Best set: ${a.bestSet ? `${a.bestSet.reps}×${fmtWeight(a.bestSet.weight)} ${unit} @ RIR ${a.bestSet.rir}` : '—'}`),
         el('p', { class: 'text-muted' }, `Last completed: ${last ? last.day : '—'}`),
       ),
     );
   }
 }
 
-// --- shell: tabs, hook, boot ------------------------------------------------
+// --- shell: menu, hook, boot ------------------------------------------------
 
-const VIEWS = ['workout', 'history', 'exercises', 'progress'] as const;
+const VIEWS = ['workout', 'history', 'exercises', 'progress', 'settings'] as const;
 type ViewName = (typeof VIEWS)[number];
 
 let activeView: ViewName = 'workout';
+
+function setMenuOpen(open: boolean): void {
+  const menu = document.getElementById('menu');
+  const toggle = document.getElementById('menu-toggle');
+  if (!menu || !toggle) return;
+  menu.hidden = !open;
+  toggle.setAttribute('aria-expanded', String(open));
+}
 
 function showTab(name: ViewName): void {
   activeView = name;
   for (const v of VIEWS) {
     const section = document.getElementById(`view-${v}`);
-    const btn = document.getElementById(`tab-${v}`);
+    const btn = document.getElementById(`menu-${v}`);
     if (!section || !btn) continue;
     section.hidden = v !== activeView;
     btn.setAttribute('aria-pressed', String(v === activeView));
   }
+  // Selecting a page always closes the menu.
+  setMenuOpen(false);
 }
 
 function renderAll(): void {
@@ -995,7 +1139,8 @@ function renderAll(): void {
     if (v === 'workout') renderWorkoutTab(section);
     else if (v === 'history') renderHistoryTab(section);
     else if (v === 'exercises') renderExercisesTab(section);
-    else renderProgressTab(section);
+    else if (v === 'progress') renderProgressTab(section);
+    else renderSettingsTab(section);
   }
   showTab(activeView);
 }
@@ -1007,6 +1152,145 @@ function renderProfiles(): void {
     el('option', { value: profile.id }, profile.name),
   ));
   select.value = activeProfile;
+}
+
+// --- settings tab: users, units, splits --------------------------------------
+
+function renderSettingsTab(section: HTMLElement): void {
+  section.replaceChildren();
+  section.append(el('h2', {}, 'Settings'));
+
+  const current = profiles.find((profile) => profile.id === activeProfile);
+  section.append(el('h3', {}, 'Users'));
+  section.append(el('p', { class: 'text-muted' },
+    `Current user: ${current?.name ?? activeProfile}. Workouts, splits and the weight unit are per user; exercise definitions are shared.`));
+  section.append(el('p', {},
+    el('button', { id: 'manage-users', type: 'button', onclick: () => openManageUsersDialog() }, 'Manage users'),
+  ));
+
+  section.append(el('h3', {}, 'Weight units'));
+  section.append(el('p', { class: 'text-muted' },
+    'Weights are always stored and progressed in kilograms. Pounds convert the display and inputs; logged pound values are rounded back to the nearest 0.5 kg.'));
+  const units = el('fieldset', { class: 'stack', role: 'radiogroup', 'aria-label': 'Weight unit' });
+  for (const value of ['kg', 'lb'] as const) {
+    const radio = el('input', {
+      type: 'radio',
+      name: 'weight-unit',
+      value,
+      id: `unit-${value}`,
+    }) as HTMLInputElement;
+    radio.checked = unit === value;
+    radio.addEventListener('change', () => {
+      if (!radio.checked) return;
+      void perform(async () => {
+        await saveUserSettings(activeProfile, { unit: value });
+        unit = value;
+        renderAll();
+      });
+    });
+    units.append(el('label', { for: `unit-${value}` }, radio,
+      value === 'kg' ? ' Kilograms (kg)' : ' Pounds (lb)'));
+  }
+  section.append(units);
+
+  section.append(el('h3', {}, 'Workout splits'));
+  section.append(el('p', { class: 'text-muted' },
+    'A split groups shared exercises for this user. Generate a workout from a split to plan exactly those exercises.'));
+  section.append(el('div', { class: 'row' },
+    el('span', { class: 'grow' }),
+    el('button', { class: 'btn-primary', onclick: () => void openSplitDialog(undefined) }, 'Add split'),
+  ));
+  if (store.splits.length === 0) {
+    section.append(el('div', { class: 'empty-state' }, 'No splits yet.'));
+  }
+  const list = el('ul', { class: 'list' });
+  for (const split of store.splits) {
+    const names = split.exerciseIds
+      .map((id) => exerciseById(id)?.name ?? `${id} (missing)`)
+      .join(', ') || 'No exercises';
+    list.append(el('li', { class: 'list-item' },
+      el('div', { class: 'grow stack' },
+        el('strong', {}, split.name),
+        el('span', { class: 'text-muted text-sm' }, names),
+      ),
+      el('button', {
+        class: 'btn-icon',
+        'aria-label': `Edit split ${split.name}`,
+        onclick: () => void openSplitDialog(split),
+      }, icon('edit')),
+      el('button', {
+        class: 'btn-icon btn-danger',
+        'aria-label': `Delete split ${split.name}`,
+        onclick: () => void perform(() => confirmDeleteSplit(split)),
+      }, icon('delete')),
+    ));
+  }
+  section.append(list);
+}
+
+async function confirmDeleteSplit(split: WorkoutSplit): Promise<void> {
+  const result = await PluginAPI.openDialog({
+    title: 'Delete split',
+    content: `Delete the split "${split.name}"? Workouts already generated from it are untouched.`,
+    buttons: [{ label: 'Cancel' }, { label: 'Delete split', color: 'warn', raised: true }],
+  });
+  if (result !== 'Delete split') return;
+  await deleteSplitRecord(split.id);
+  store.splits = store.splits.filter((item) => item.id !== split.id);
+  renderAll();
+  snack(`Deleted split ${split.name}`, 'SUCCESS');
+}
+
+async function deleteSplitRecord(id: string): Promise<void> {
+  await PluginAPI.persistDataSynced('', splitKey(activeProfile, id));
+}
+
+function openSplitDialog(existing: WorkoutSplit | undefined): void {
+  const dialog = el('dialog');
+  const name = el('input', {
+    id: `split-name-${existing?.id ?? 'new'}`,
+    type: 'text',
+    value: existing?.name ?? '',
+  });
+  const chooser = el('fieldset', { class: 'stack' });
+  const boxes: Array<{ id: string; box: HTMLInputElement }> = [];
+  for (const def of [...store.exercises].sort((a, b) => a.name.localeCompare(b.name))) {
+    const box = el('input', { type: 'checkbox', value: def.id }) as HTMLInputElement;
+    box.checked = existing?.exerciseIds.includes(def.id) ?? false;
+    boxes.push({ id: def.id, box });
+    chooser.append(el('label', {}, box, ` ${def.name}`));
+  }
+
+  const submit = async (): Promise<void> => {
+    const splitName = name.value.trim();
+    if (!splitName) {
+      snack('Enter a split name', 'WARNING');
+      return;
+    }
+    const split: WorkoutSplit = {
+      id: existing?.id ?? newId(),
+      name: splitName,
+      exerciseIds: boxes.filter((item) => item.box.checked).map((item) => item.id),
+    };
+    try {
+      await saveSplit(split);
+    } catch (e) {
+      snack(`Could not save the split: ${String(e)}`, 'ERROR');
+      return;
+    }
+    const idx = store.splits.findIndex((item) => item.id === split.id);
+    if (idx >= 0) store.splits[idx] = split;
+    else store.splits.push(split);
+    closeDialog(dialog);
+    renderAll();
+    snack(`Saved split ${split.name}`, 'SUCCESS');
+  };
+
+  dialog.append(el('div', { class: 'stack' },
+    el('h2', {}, existing ? `Edit split ${existing.name}` : 'Add split'),
+    dialogForm(dialog, el('div', { class: 'stack' }, field('Name', name), chooser), 'Save', submit),
+  ));
+  showDialog(dialog);
 }
 
 function openManageUsersDialog(): void {
@@ -1071,7 +1355,7 @@ function openManageUsersDialog(): void {
     if (!profile) return;
     const result = await PluginAPI.openDialog({
       title: 'Delete user',
-      content: `Permanently delete "${profile.name}" and that user's workouts and profile exercise overrides? Shared exercise definitions and other users remain.`,
+      content: `Permanently delete "${profile.name}" and that user's workouts, splits, unit setting and profile exercise overrides? Shared exercise definitions and other users remain.`,
       buttons: [{ label: 'Cancel' }, { label: 'Delete user', color: 'warn', raised: true }],
     });
     if (result !== 'Delete user') return;
@@ -1079,7 +1363,9 @@ function openManageUsersDialog(): void {
     for (const key of keys) {
       if (key === PROFILE_PREFIX + selected ||
           key.startsWith(`user:${selected}:plan:`) ||
-          key.startsWith(`user:${selected}:ex:`)) {
+          key.startsWith(`user:${selected}:ex:`) ||
+          key === settingsKey(selected) ||
+          key.startsWith(splitKeyPrefix(selected))) {
         await PluginAPI.persistDataSynced('', key);
       }
     }
@@ -1121,8 +1407,13 @@ async function boot(): Promise<void> {
   renderAll();
 }
 
+document.getElementById('menu-toggle')?.addEventListener('click', () => {
+  const menu = document.getElementById('menu');
+  setMenuOpen(menu?.hidden ?? true);
+});
+
 for (const v of VIEWS) {
-  document.getElementById(`tab-${v}`)?.addEventListener('click', () => showTab(v));
+  document.getElementById(`menu-${v}`)?.addEventListener('click', () => showTab(v));
 }
 
 document.getElementById('profile-select')?.addEventListener('change', (event) => {
@@ -1146,7 +1437,6 @@ document.getElementById('profile-select')?.addEventListener('change', (event) =>
     showTab('workout');
   });
 });
-document.getElementById('manage-users')?.addEventListener('click', () => openManageUsersDialog());
 
 if (typeof PluginAPI.registerHook === 'function') {
   PluginAPI.registerHook(PluginAPI.Hooks.PERSISTED_DATA_CHANGED, () => {

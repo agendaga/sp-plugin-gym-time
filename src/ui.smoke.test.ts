@@ -7,6 +7,8 @@ import { readFileSync } from 'node:fs';
 import { test, before } from 'node:test';
 import { JSDOM } from 'jsdom';
 
+import { setOrm } from './domain.js';
+
 const mem: Record<string, string> = {};
 const registeredHooks: Array<{ hook: string; fn: () => void }> = [];
 const snacks: Array<{ msg: string; type?: string }> = [];
@@ -60,7 +62,7 @@ before(async () => {
   );
   const dom = new JSDOM(shell, { url: 'https://localhost/' });
   const hostStyles = dom.window.document.createElement('style');
-  hostStyles.textContent = '.stack { display: flex; }';
+  hostStyles.textContent = ':root { --bg: rgb(12, 34, 56); } .stack { display: flex; }';
   dom.window.document.head.append(hostStyles);
   displayOf = (element) => dom.window.getComputedStyle(element).display;
   const dialogProto = dom.window.HTMLDialogElement.prototype as unknown as Record<string, (() => void) | undefined>;
@@ -115,6 +117,33 @@ function planRecords(): Array<{ id: string; day: string; exercises: Array<{ exer
     .map((k) => JSON.parse(mem[k]!));
 }
 
+function splitRecords(profileId: string): Array<{ id: string; name: string; exerciseIds: string[] }> {
+  return Object.keys(mem)
+    .filter((k) => k.startsWith(`split:${profileId}:`) && mem[k] !== '')
+    .map((k) => JSON.parse(mem[k]!));
+}
+
+function nonDefaultProfileId(): string {
+  const key = Object.keys(mem).find((k) => k.startsWith('profile:') && mem[k] !== '');
+  assert.ok(key, 'no additional profile exists');
+  return key.slice('profile:'.length);
+}
+
+/** Opens the hamburger menu and navigates; the menu closes on selection. */
+function openMenuAndGo(name: string): void {
+  const toggle = document.getElementById('menu-toggle');
+  assert.ok(toggle, 'missing #menu-toggle');
+  toggle.click();
+  assert.equal(document.getElementById('menu')!.hidden, false);
+  const item = document.getElementById(`menu-${name}`);
+  assert.ok(item, `missing #menu-${name}`);
+  item.click();
+  assert.equal(document.getElementById('menu')!.hidden, true);
+}
+
+const LB = 2.2046226218;
+const oneDecimal = (n: number): string => String(Math.round(n * 10) / 10);
+
 test('boots, seeds the six default exercises and renders an empty workout', () => {
   const exKeys = Object.keys(mem).filter((k) => k.startsWith('ex:'));
   assert.equal(exKeys.length, 6);
@@ -127,14 +156,35 @@ test('navigation hides inactive views even when the host styles stack as flex', 
   assert.notEqual(displayOf(view('workout')), 'none');
   assert.equal(displayOf(view('history')), 'none');
   assert.equal(displayOf(view('exercises')), 'none');
-  document.getElementById('tab-exercises')!.click();
+  openMenuAndGo('exercises');
   assert.equal(displayOf(view('workout')), 'none');
   assert.notEqual(displayOf(view('exercises')), 'none');
-  assert.equal(document.getElementById('tab-exercises')!.getAttribute('aria-pressed'), 'true');
-  document.getElementById('tab-workout')!.click();
+  assert.equal(document.getElementById('menu-exercises')!.getAttribute('aria-pressed'), 'true');
+  openMenuAndGo('workout');
+});
+
+test('the menu includes Settings and opens the settings section', () => {
+  openMenuAndGo('settings');
+  assert.notEqual(displayOf(view('settings')), 'none');
+  assert.equal(displayOf(view('workout')), 'none');
+  assert.ok(view('settings').textContent?.includes('Manage users'));
+  openMenuAndGo('workout');
+});
+
+test('manage users is available only in the settings view', () => {
+  openMenuAndGo('settings');
+  const manage = document.getElementById('manage-users');
+  assert.ok(manage, 'missing Manage users control');
+  for (const name of ['workout', 'history', 'exercises', 'progress']) {
+    assert.equal(view(name).querySelector('#manage-users'), null);
+    assert.notEqual(manage.closest('section'), view(name));
+  }
+  assert.equal(manage.closest('section'), view('settings'));
+  openMenuAndGo('workout');
 });
 
 test('closing a dialog removes it instead of leaving it below the page', () => {
+  openMenuAndGo('settings');
   document.getElementById('manage-users')!.click();
   const dialog = lastDialog();
   assert.ok(dialog.hasAttribute('open'));
@@ -142,9 +192,28 @@ test('closing a dialog removes it instead of leaving it below the page', () => {
   assert.equal(document.contains(dialog), false);
 });
 
-test('user switcher is clearly labelled', () => {
-  const label = document.querySelector('label[for="profile-select"]');
-  assert.equal(label?.textContent, 'Switch user');
+test('header contains a hamburger menu and a user selector showing the profile name', () => {
+  const header = document.querySelector('header.app-header');
+  assert.ok(header, 'missing sticky app header');
+  assert.equal(document.defaultView!.getComputedStyle(header).position, 'sticky');
+  assert.ok(header.classList.contains('card'));
+  assert.equal(document.defaultView!.getComputedStyle(header).paddingTop, '0px');
+  assert.equal(document.defaultView!.getComputedStyle(header).paddingBottom, '0px');
+  const headerRow = header.querySelector('.app-header__row');
+  assert.ok(headerRow, 'missing header controls row');
+  assert.equal(document.defaultView!.getComputedStyle(headerRow).display, 'flex');
+  assert.equal(document.defaultView!.getComputedStyle(headerRow).flexWrap, 'nowrap');
+  assert.equal(headerRow.lastElementChild?.id, 'menu-toggle');
+  const menu = document.getElementById('menu');
+  assert.ok(menu, 'missing section menu');
+  assert.equal(menu.parentElement, header);
+  assert.equal(menu.previousElementSibling?.className, 'app-header__row');
+  assert.equal(document.defaultView!.getComputedStyle(menu).position, 'static');
+  assert.equal(document.getElementById('menu-toggle')?.getAttribute('aria-label'), 'Open menu');
+  const select = document.getElementById('profile-select') as HTMLSelectElement;
+  assert.equal(select.getAttribute('aria-label'), 'Switch user');
+  assert.equal(select.selectedOptions[0]?.textContent, 'My workouts');
+  assert.ok(header.querySelector('.user-switcher .material-icons'), 'user selector lacks a person icon');
 });
 
 test('exercises tab lists the defaults with overload and plateau state', () => {
@@ -174,13 +243,16 @@ test('adding a custom exercise persists under the shared exercise key', async ()
 test('generating a plan creates a plan record and workout cards', async () => {
   buttonsIn(view('workout'), 'Generate next workout')[0]!.click();
   const dialog = lastDialog();
-  const boxes = [...dialog.querySelectorAll('input[type=checkbox]')] as HTMLInputElement[];
-  assert.equal(boxes.length, 7);
-  for (const b of boxes) b.checked = true;
+  const splitSelect = dialog.querySelector('#generate-split') as HTMLSelectElement;
+  assert.ok(splitSelect, 'missing split selector');
+  assert.equal(splitSelect.value, ''); // Defaults to All exercises.
+  // The preview lists every exercise with its next target.
+  assert.ok(dialog.textContent?.includes('Back Squat — next: 3×8 @ 60 kg'));
   await submitDialog(dialog);
   const plans = planRecords();
   assert.equal(plans.length, 1);
   assert.equal(plans[0]!.day, '2026-11-22');
+  assert.equal(plans[0]!.exercises.length, 7); // every defined exercise
   assert.equal(view('workout').querySelectorAll('.card').length, 7);
   // The planned line shows the ORM the prescription implies at the default RIR 1:
   // Back Squat 3×8 @ 60 kg (Epley) = 60·(1+9/30) = 78 kg.
@@ -288,7 +360,7 @@ test('incomplete planned work stays out of the progress view', async () => {
 });
 
 test('the progress graph shows session ORM and skips incomplete work', () => {
-  document.getElementById('tab-progress')!.click();
+  openMenuAndGo('progress');
   const cards = [...view('progress').querySelectorAll('.card')] as HTMLElement[];
   const squat = cards.find((c) => c.querySelector('h3')?.textContent === 'Back Squat')!;
   // One completed session so far: a single centered point, no broken scale.
@@ -304,7 +376,7 @@ test('the progress graph shows session ORM and skips incomplete work', () => {
   assert.ok(bench.textContent?.includes('No completed sessions yet'));
   // Plateau wording is gone from this tab.
   assert.ok(!view('progress').textContent?.includes('plateau'));
-  document.getElementById('tab-workout')!.click();
+  openMenuAndGo('workout');
 });
 
 test('history opens older workouts for date and set edits', async () => {
@@ -319,7 +391,7 @@ test('history opens older workouts for date and set edits', async () => {
   await submitDialog(dialog);
   assert.equal(planRecords().length, 2);
 
-  document.getElementById('tab-history')!.click();
+  openMenuAndGo('history');
   const rows = view('history').querySelectorAll('li');
   assert.equal(rows.length, 2);
   assert.ok(rows[1]!.textContent?.includes('2026-11-18'));
@@ -370,9 +442,7 @@ test('users have separate exercises, history, and progress while legacy data rem
   (exerciseDialog.querySelector('input[id^=name-]') as HTMLInputElement).value = 'Client squat';
   await submitDialog(exerciseDialog);
   buttonsIn(view('workout'), 'Generate next workout')[0]!.click();
-  const generateDialog = lastDialog();
-  (generateDialog.querySelector('input[type=checkbox]') as HTMLInputElement).checked = true;
-  await submitDialog(generateDialog);
+  await submitDialog(lastDialog()); // All exercises for a user without splits.
   const clientCard = view('workout').querySelector('.card') as HTMLElement;
   buttonsIn(clientCard, 'Log set')[0]!.click();
   await flush();
@@ -431,7 +501,7 @@ test('deleting a workout requires confirmation and leaves other users untouched'
   const select = document.getElementById('profile-select') as HTMLSelectElement;
   const otherId = select.value;
   const originalPlans = JSON.stringify(planRecords());
-  document.getElementById('tab-history')!.click();
+  openMenuAndGo('history');
   const history = view('history');
 
   confirmDialog = false;
@@ -465,7 +535,7 @@ test('deleting a workout requires confirmation and leaves other users untouched'
 });
 
 test('deleting the selected workout opens a remaining workout instead', async () => {
-  document.getElementById('tab-history')!.click();
+  openMenuAndGo('history');
   const history = view('history');
   const row = history.querySelectorAll('li')[1] as HTMLElement;
   buttonsIn(row, 'View / edit')[0]!.click();
@@ -473,7 +543,7 @@ test('deleting the selected workout opens a remaining workout instead', async ()
     (view('workout').querySelector('input[aria-label="Workout date"]') as HTMLInputElement).value,
     '2026-11-18',
   );
-  document.getElementById('tab-history')!.click();
+  openMenuAndGo('history');
   buttonsIn(history.querySelectorAll('li')[1] as HTMLElement, 'Delete')[0]!.click();
   await flush();
   assert.equal(planRecords().length, 1);
@@ -506,6 +576,8 @@ test('user deletion removes only the selected profile and preserves shared exerc
     targetSets: 3,
     startWeight: 40,
   });
+  mem[`settings:${userId}`] = JSON.stringify({ unit: 'lb' });
+  mem[`split:${userId}:s1`] = JSON.stringify({ id: 's1', name: 'Disposable split', exerciseIds: ['squat'] });
   registeredHooks[0]!.fn();
   await flush();
   assert.ok(mem['ex:legacy']);
@@ -528,6 +600,8 @@ test('user deletion removes only the selected profile and preserves shared exerc
   assert.equal(mem[`profile:${userId}`], '');
   assert.equal(mem[`user:${userId}:plan:p-disposable`], '');
   assert.equal(mem[`user:${userId}:ex:legacy`], '');
+  assert.equal(mem[`settings:${userId}`], '');
+  assert.equal(mem[`split:${userId}:s1`], '');
   assert.ok(mem['ex:legacy']);
   assert.deepEqual(
     Object.keys(mem).filter((key) => key.startsWith('ex:') && mem[key] !== '').sort(),
@@ -588,7 +662,7 @@ test('the ORM trend chart plots completed sessions chronologically', async () =>
   });
   registeredHooks[0]!.fn();
   await flush();
-  document.getElementById('tab-progress')!.click();
+  openMenuAndGo('progress');
   const cards = [...view('progress').querySelectorAll('.card')] as HTMLElement[];
   const deadlift = cards.find((c) => c.querySelector('h3')?.textContent === 'Deadlift')!;
   const dots = [...deadlift.querySelectorAll('circle[data-day]')];
@@ -608,4 +682,210 @@ test('the ORM trend chart plots completed sessions chronologically', async () =>
   delete mem['plan:graph-2'];
   registeredHooks[0]!.fn();
   await flush();
+});
+
+async function addSplit(name: string, exerciseNames: string[]): Promise<void> {
+  openMenuAndGo('settings');
+  buttonsIn(view('settings'), 'Add split')[0]!.click();
+  const dialog = lastDialog();
+  (dialog.querySelector('input[id^=split-name-]') as HTMLInputElement).value = name;
+  const boxes = [...dialog.querySelectorAll('input[type=checkbox]')] as HTMLInputElement[];
+  for (const box of boxes) {
+    if (exerciseNames.some((n) => box.parentElement?.textContent?.includes(n) ?? false)) {
+      box.checked = true;
+    }
+  }
+  await submitDialog(dialog);
+}
+
+test('splits persist under active profile keys, survive editing and stay isolated after switching', async () => {
+  // Checkbox order is the shared exercise list sorted by name.
+  await addSplit('Push day', ['Back Squat', 'Barbell Row']);
+  let splits = splitRecords('default');
+  assert.equal(splits.length, 1);
+  assert.equal(splits[0]!.name, 'Push day');
+  assert.deepEqual(splits[0]!.exerciseIds, ['squat', 'barbell-row']);
+  const splitId = splits[0]!.id;
+  assert.ok(mem[`split:default:${splitId}`]);
+
+  // Edit: rename and drop the first exercise; the record key stays the same.
+  (view('settings').querySelector('button[aria-label="Edit split Push day"]') as HTMLButtonElement).click();
+  const editDialog = lastDialog();
+  (editDialog.querySelector('input[id^=split-name-]') as HTMLInputElement).value = 'Push';
+  (editDialog.querySelector('input[type=checkbox]') as HTMLInputElement).checked = false;
+  await submitDialog(editDialog);
+  splits = splitRecords('default');
+  assert.equal(splits.length, 1);
+  assert.equal(splits[0]!.name, 'Push');
+  assert.deepEqual(splits[0]!.exerciseIds, ['barbell-row']);
+  assert.ok(mem[`split:default:${splitId}`]);
+
+  // Another profile starts with no splits and keeps its own records.
+  const select = document.getElementById('profile-select') as HTMLSelectElement;
+  const otherId = nonDefaultProfileId();
+  select.value = otherId;
+  select.dispatchEvent(new JSEvent('change'));
+  await flush();
+  assert.equal(splitRecords(otherId).length, 0);
+  assert.ok(!view('settings').textContent?.includes('Push'));
+  await addSplit('Client split', ['Bench Press']);
+  assert.equal(splitRecords(otherId).length, 1);
+
+  select.value = 'default';
+  select.dispatchEvent(new JSEvent('change'));
+  await flush();
+  assert.equal(splitRecords('default')[0]!.name, 'Push');
+
+  // Deleting removes the split record only.
+  (view('settings').querySelector('button[aria-label="Delete split Push"]') as HTMLButtonElement).click();
+  await flush();
+  assert.equal(splitRecords('default').length, 0);
+  assert.equal(mem[`split:default:${splitId}`], '');
+  assert.equal(splitRecords(otherId).length, 1);
+});
+
+test('generation from a split plans exactly its exercises; All exercises plans everything', async () => {
+  await addSplit('Upper body', ['Back Squat', 'Bench Press']);
+  buttonsIn(view('workout'), 'Generate next workout')[0]!.click();
+  const dialog = lastDialog();
+  const splitSelect = dialog.querySelector('#generate-split') as HTMLSelectElement;
+  assert.ok(![...splitSelect.options].some((option) => option.textContent === 'All exercises'));
+  splitSelect.value = splitRecords('default')[0]!.id;
+  splitSelect.dispatchEvent(new JSEvent('change'));
+  await flush();
+  const preview = dialog.textContent ?? '';
+  assert.ok(preview.includes('Back Squat'));
+  assert.ok(preview.includes('Bench Press'));
+  assert.ok(!preview.includes('Deadlift'));
+  await submitDialog(dialog);
+  // The generated plan contains exactly the split's exercises.
+  const splitPlan = planRecords().find((p) => p.exercises.length === 2);
+  assert.ok(splitPlan, 'no two-exercise plan record was written');
+  assert.deepEqual(
+    splitPlan.exercises.map((e) => e.exerciseId).sort(),
+    ['bench-press', 'squat'],
+  );
+
+  // With no splits, All exercises is the sole option and plans every exercise.
+  openMenuAndGo('settings');
+  (view('settings').querySelector('button[aria-label="Delete split Upper body"]') as HTMLButtonElement).click();
+  await flush();
+  openMenuAndGo('workout');
+  buttonsIn(view('workout'), 'Generate next workout')[0]!.click();
+  const allDialog = lastDialog();
+  const allSelect = allDialog.querySelector('#generate-split') as HTMLSelectElement;
+  assert.equal(allSelect.options.length, 1);
+  assert.equal(allSelect.options[0]?.textContent, 'All exercises');
+  assert.equal(allSelect.value, '');
+  await submitDialog(allDialog);
+  const definedCount = view('exercises').querySelectorAll('.list-item').length;
+  assert.ok(planRecords().some((p) => p.exercises.length === definedCount));
+});
+
+test('a split with no valid remaining exercises warns and generates no plan', async () => {
+  // Add a temporary shared exercise, split on it alone, then delete it.
+  openMenuAndGo('exercises');
+  buttonsIn(view('exercises'), 'Add exercise')[0]!.click();
+  const exDialog = lastDialog();
+  (exDialog.querySelector('input[id^=name-]') as HTMLInputElement).value = 'Temp Lift';
+  await submitDialog(exDialog);
+  await addSplit('Gone split', ['Temp Lift']);
+
+  const tempItem = [...view('exercises').querySelectorAll('.list-item')]
+    .find((li) => li.textContent?.includes('Temp Lift')) as HTMLElement;
+  (tempItem.querySelector('button[aria-label="Delete Temp Lift"]') as HTMLButtonElement).click();
+  await flush();
+
+  const plansBefore = planRecords().length;
+  openMenuAndGo('workout');
+  buttonsIn(view('workout'), 'Generate next workout')[0]!.click();
+  const dialog = lastDialog();
+  const splitSelect = dialog.querySelector('#generate-split') as HTMLSelectElement;
+  splitSelect.value = splitRecords('default').find((s) => s.name === 'Gone split')!.id;
+  splitSelect.dispatchEvent(new JSEvent('change'));
+  await flush();
+  assert.ok(dialog.textContent?.includes('no available exercises'));
+  await submitDialog(dialog);
+  assert.ok(snacks[snacks.length - 1]?.msg.includes('no available exercises'));
+  assert.equal(planRecords().length, plansBefore);
+  buttonsIn(dialog, 'Cancel')[0]!.click();
+});
+
+test('pounds convert the display and inputs while storage stays canonical kg', async () => {
+  const bestOrmKg = setOrm({ reps: 99, weight: 60, rir: 2 });
+  // A completed session to give the progress view a best set (60 kg stored).
+  mem['plan:lb-fixture'] = JSON.stringify({
+    id: 'lb-fixture',
+    day: '2026-11-20',
+    exercises: [{
+      exerciseId: 'squat',
+      targetReps: 8,
+      targetSets: 3,
+      weight: 60,
+      loggedSets: [{ reps: 99, weight: 60, rir: 2 }],
+      isComplete: true,
+    }],
+  });
+  registeredHooks[0]!.fn();
+  await flush();
+
+  openMenuAndGo('settings');
+  const lbRadio = document.getElementById('unit-lb') as HTMLInputElement;
+  lbRadio.checked = true;
+  lbRadio.dispatchEvent(new JSEvent('change'));
+  await flush();
+  assert.equal(JSON.parse(mem['settings:default']!).unit, 'lb');
+
+  // Exercise listing shows the converted start weight (60 kg -> 132.3 lb).
+  openMenuAndGo('exercises');
+  assert.ok(view('exercises').textContent?.includes('start 132.3 lb'));
+
+  // The workout card converts the stored kg target and takes pound input.
+  openMenuAndGo('workout');
+  const squatCard = [...view('workout').querySelectorAll('.card')]
+    .find((c) => c.querySelector('h3')?.textContent === 'Back Squat') as HTMLElement;
+  const weightInput = squatCard.querySelector('input[aria-label^="Weight"]') as HTMLInputElement;
+  const storedKg = planRecords().map((p) => p.exercises.find((e) => e.exerciseId === 'squat')!.weight);
+  assert.ok(storedKg.some((w) => weightInput.value === oneDecimal(w * LB)));
+  assert.equal(weightInput.step, '0.1');
+
+  weightInput.value = '100';
+  buttonsIn(squatCard, 'Log set')[0]!.click();
+  await flush();
+  // 100 lb = 45.36 kg, stored at the nearest 0.5 kg; nothing stores 100.
+  const allSets = planRecords().flatMap((p) => p.exercises.flatMap((e) => e.loggedSets));
+  assert.ok(allSets.some((s) => s.weight === 45.5));
+  assert.ok(!allSets.some((s) => s.weight === 100));
+  // The chip label converts the canonical kg back to pounds.
+  const freshCard = [...view('workout').querySelectorAll('.card')]
+    .find((c) => c.querySelector('h3')?.textContent === 'Back Squat') as HTMLElement;
+  const chip = freshCard.querySelector('button[aria-label^="Remove set"]') as HTMLButtonElement;
+  assert.ok(chip.textContent?.includes('100.3 lb @ RIR'));
+
+  // Progress labels convert too: the completed 99×60 kg set in pounds.
+  openMenuAndGo('progress');
+  const progress = view('progress').textContent ?? '';
+  assert.ok(progress.includes(`Best estimated ORM: ${oneDecimal(bestOrmKg * LB)} lb`));
+  assert.ok(progress.includes('Best set: 99×132.3 lb @ RIR 2'));
+
+  // Switching back to kg leaves every stored weight untouched.
+  const afterLbLog = JSON.stringify(planRecords());
+  openMenuAndGo('settings');
+  const kgRadio = document.getElementById('unit-kg') as HTMLInputElement;
+  kgRadio.checked = true;
+  kgRadio.dispatchEvent(new JSEvent('change'));
+  await flush();
+  assert.equal(JSON.parse(mem['settings:default']!).unit, 'kg');
+  assert.equal(JSON.stringify(planRecords()), afterLbLog);
+
+  openMenuAndGo('workout');
+  const squatCardKg = [...view('workout').querySelectorAll('.card')]
+    .find((c) => c.querySelector('h3')?.textContent === 'Back Squat') as HTMLElement;
+  const kgInput = squatCardKg.querySelector('input[aria-label^="Weight"]') as HTMLInputElement;
+  assert.equal(kgInput.step, '0.5');
+  assert.ok(squatCardKg.textContent?.includes(' kg'));
+  const chipKg = squatCardKg.querySelector('button[aria-label^="Remove set"]') as HTMLButtonElement;
+  assert.ok(chipKg.textContent?.includes('45.5 kg @ RIR 1'));
+
+  delete mem['plan:lb-fixture'];
 });
