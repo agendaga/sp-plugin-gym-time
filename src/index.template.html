@@ -12,6 +12,7 @@
         z-index: 10;
         background-color: #fff;
         background-color: rgb(from var(--card-bg, var(--bg, #fff)) r g b / 1);
+        padding-block: 0;
       }
       .app-header__row {
         display: flex;
@@ -22,6 +23,17 @@
       .app-header h1 {
         margin: 0;
         font-size: 1.25rem;
+      }
+      @media (max-width: 600px) {
+        .app-header h1 {
+          display: none;
+        }
+        #today {
+          flex: 1;
+          color: var(--text-color);
+          font-size: 1.25rem;
+          font-weight: 600;
+        }
       }
       .user-switcher {
         display: inline-flex;

@@ -197,6 +197,8 @@ test('header contains a hamburger menu and a user selector showing the profile n
   assert.ok(header, 'missing sticky app header');
   assert.equal(document.defaultView!.getComputedStyle(header).position, 'sticky');
   assert.ok(header.classList.contains('card'));
+  assert.equal(document.defaultView!.getComputedStyle(header).paddingTop, '0px');
+  assert.equal(document.defaultView!.getComputedStyle(header).paddingBottom, '0px');
   const headerRow = header.querySelector('.app-header__row');
   assert.ok(headerRow, 'missing header controls row');
   assert.equal(document.defaultView!.getComputedStyle(headerRow).display, 'flex');
